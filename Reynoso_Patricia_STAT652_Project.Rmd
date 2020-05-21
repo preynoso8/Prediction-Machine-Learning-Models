@@ -1,0 +1,836 @@
+---
+title: "Lending Club Statistical Learning Project"
+author: "Patricia Reynoso"
+date: \today
+output:
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+
+**Abstract**
+
+The powerful prediction capabilities of Machine Learning algorithms are rapidly transforming the way data driven decisions are made accross all industries. Day by day, more algorithms are developed and implemented, and more knowdlege is aquired on different ways to interpret large amounts of data, and use these mechanisms in all kinds of processes, most importantly, in all sorts of high-stakes human decision making. In this work, three years worth of data (2012, 2013, 2014) from Lending Club, the online platform for personal lending and borrowing, are used to train and test five statistical learning algorithms: kNN, Logistic Regression, Rpart decision tree, C5.0, and Random Forest. The goal is to predict if the loans will be paid or not. Every model will be evaluated for accuracy, and the best model will be used to classify 10% of the loans made during 2015.
+
+
+
+
+**Introduction**
+
+The original dataset is downloaded from the kaggle website, and contains 12 years worth of data on all the loans granted during that period of time. Each loan is described in terms of 151 features and a target variable.  The target variable is the loan_status, which has 7 different levels, but we are only interested in two of them, fully-paid and charged-off. We will use these two levels to do binary classifications. We will apply the 5 step learning process in the Lanz book to each model covered in this project. There will be a randomized subsetting of the complete dataset into two datasets, one for training (75% of the dataset), and the other one for testing (remaining 25% of the dataset). The predictions will be compared to both the train and the test datasets to assess the accuracy of each model and check for possible overfitting. The most accurate model will be fit to the totality of the dataset for 2012-14 and then used to classify the loan status for 10% of thel loans granted in 2015.
+
+
+
+
+
+
+
+{r setup, include = FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+
+
+**A.Data Downloading**
+
+```{r}
+library(tictoc)
+tic()
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo=F}
+
+library(dplyr)
+library(lubridate)
+```
+
+**A.1 Read Lending Club Full dataset, subset in relevant years, and save as RDS file**
+
+```{r, eval=FALSE}
+# Subset the original data to a dataset with the years 2012-2014
+LC <-read.csv('accepted_2007_to_2018Q4.csv')
+LC_2012_15 <- LC%>%
+              mutate(date=dmy(paste("01-", issue_d , sep ="")))%>%
+              filter(year(date) %in% c("2012", "2013", "2014", "2015"))
+
+#Save as RDS file and read RDS file
+saveRDS(LC_2012_15, file="LC_2012_15.RDS")
+```
+
+
+
+**B. Data Cleaning**
+
+**B.1 Data Cleaning: Dropping empty variables or with mostly missing values**
+
+```{r}
+LC_2012_15 <- readRDS("LC_2012_15.RDS")
+
+# Drop the variables with more than 50% of missing values
+a = LC_2012_15[,!sapply(LC_2012_15, function(x) mean(is.na(x)))>0.5]
+```
+
+**B.2 Data Cleaning: Drop lagging indicators, and irrelevant variables**
+
+```{r, tidy=FALSE}
+
+
+# Drop Redundant/Irrelevant Variables
+
+
+d = subset(a, select = c(funded_amnt, int_rate, installment, grade, emp_length,
+                         home_ownership, annual_inc, loan_status, addr_state,
+                         dti, fico_range_low, inq_last_6mths, open_acc, pub_rec,
+                         revol_bal, revol_util, total_acc, total_pymnt,
+                         last_fico_range_low,  tot_coll_amt,tot_cur_bal,
+                         total_rev_hi_lim, acc_open_past_24mths, avg_cur_bal,
+                         bc_open_to_buy, bc_util, mo_sin_old_il_acct,
+                         total_rec_prncp, total_rec_int,last_pymnt_amnt,
+                         mo_sin_old_rev_tl_op, mo_sin_rcnt_rev_tl_op,
+                         mo_sin_rcnt_tl, mort_acc, mths_since_recent_bc,
+                         mths_since_recent_inq, num_actv_bc_tl, num_actv_rev_tl,
+                         num_bc_sats, num_bc_tl, num_il_tl, num_op_rev_tl,
+                         num_rev_accts, num_rev_tl_bal_gt_0, num_sats,
+                         num_tl_op_past_12m, pct_tl_nvr_dlq, percent_bc_gt_75,
+                         pub_rec_bankruptcies, tax_liens, tot_hi_cred_lim,
+                         total_bal_ex_mort, total_bc_limit,
+                         total_il_high_credit_limit, date))
+ 
+                    
+
+```
+
+
+**B.3 Data Cleaning: Transform emp_length into the right format**
+
+
+```{r, warning=F, message=F}
+
+# Transform emp_length to numeric
+library(tidyverse)
+library(tidyr)
+library(stringr)
+numextract <- function(string){ 
+  str_extract(string, "\\-*\\d+\\.*\\d*")
+} 
+vars2<-d%>%
+          mutate(emp_length = as.numeric(numextract(as.character(emp_length)))) 
+
+dim(vars2)
+```
+
+**B.4 Data Cleaning: Handle Missing Values**
+
+
+A thorough analysis of the missing Values shows that even by ommiting the rows with the missing,
+we are able to keep hundres of thousands of observations for our predictions.
+Therefore, the rows with missing values will be ommited.
+
+```{r,warning=F, message=F}
+# Drop rows with missing values
+library(tidyr)
+without_nas <- drop_na(vars2)
+dim(without_nas)
+```
+
+**B.5 Data Cleaning: Subset into only two levels for our target variable:loan_status**
+
+```{r}
+
+# Select two classification levels for loan_status and make them 1-0
+status_class <- without_nas%>%
+                filter(loan_status %in% c("Fully Paid", "Charged Off"))%>%
+                mutate(loan_status = as.numeric(ifelse(loan_status == "Charged Off",1,0)))
+
+```
+
+
+
+**B.6 Data Cleaning: Identify and remove outliers**
+
+```{r}
+
+#Remove outliers (last percentile)
+outlier_free <- status_class%>%
+                      filter(annual_inc <= 250000, 
+                             dti < 40, 
+                             open_acc < 40, 
+                             pub_rec < 10, 
+                             revol_bal < 94000,
+                             revol_util < 100, 
+                             total_acc < 62)
+```
+
+
+**B.7 Data Cleaning: Subset into two data sets: one for 2012-2014 to fit our models, and one for 2015 to evaluate our best model**
+
+```{r}
+
+#Subset for 2012 to 2014 and 2015 and drop date
+
+clean_12_14 <- outlier_free%>%
+                  filter(year(date) %in% c("2012", "2013", "2014"))%>%
+                  select(-date)
+clean_15 <- outlier_free%>%
+                  filter(year(date) == "2015")%>%
+                  select(-date)
+
+```
+
+
+**C. Data Structure**
+
+Once we have cleaned the data, we have our dataset ready.
+
+```{r}
+dim(clean_12_14)
+dim(clean_15)
+```
+
+Data Frame Str   |  2012_2014  |    2015
+-----------------|-------------|----------------
+No. Rows         |     308253  |  294988
+No. Variables    |         54  |      54
+
+
+
+**D. Variable Selection**
+
+
+At this point, we want to know which of the 53 feature variable still remaining should be selected for our classification models.
+To accomplish this, we will use the rPart algorithm.
+
+Using rPart we identify the most important variables out of the 54 remaining in our dataset.
+
+```{r, message=F, warning=F}
+library(rpart)
+tree=rpart(loan_status~.,data=clean_12_14,method="class")
+tree$variable.importance
+```
+
+**E. Important Variables Description**
+
+
+After our varible selection process, we will keep 16 features listed below along with our target.
+
+
+
+
+   Variable              |    Description
+-------------------------|--------------------------------------------------------------
+**loan_status**          |  **Target variable Levels: 1.Fully Paid 2. Charged Off**
+last_fico_range_low      |  The lower boundary range the borrowers last Fico belongs to 
+last_pymnt_amnt          |  Last total payment amount received
+total_rec_prncp          |  Principal received to date
+funded_amnt              |  The total amount committed to that loan at that point of time     
+installment              |  The monthly payment owed by the owner if the loan originates     
+total_pymnt              |  Payments received to date for total amount funded
+total_rec_int            |  Interest received to date        
+revol_bal                |  Total credit revolving balance          
+grade                    |  LC assigned loan grade
+int_rate                 |  Interest rate on the loan
+mo_sin_old_rev_tl_op     |  Months since oldest revolving account opened      
+addr_state               |  The state provided by the borrower in the loan application
+annual_inc               |  The self reported annual income provided by the borrower  
+home_ownership           |  The home ownership status by the borrower or from credit report  
+tot_cur_bal              |  Total current balance on all account
+dti                      |  A ratio calculated using the borrowers debt divided by income
+
+
+**F. Check for potential colinearity among the important variables**
+
+As a second filter, we need to check for colinearity between features. We use a correlation matrix to do this.
+The factor variables are transformed into integer to make them part of this analysis.
+
+Checking our important variables for colinearity:
+
+```{r}
+
+#Create a data frame with important variables in numeric format for colinearity analysis
+
+imp_var_num <- clean_12_14%>%
+              mutate(grade1= as.integer(grade),
+                     home_ownership1=as.integer(home_ownership),
+                     addr_state1 = as.integer(addr_state))%>%
+              select(last_fico_range_low, last_pymnt_amnt,funded_amnt,
+                     revol_bal, grade1, home_ownership1, addr_state1,
+                     mo_sin_old_rev_tl_op, annual_inc,
+                     tot_cur_bal, dti, loan_status,  -home_ownership)
+
+
+```
+
+
+After a first run of a correlation matrix, we dropped the correlated variables. This is the final correlation matrix for our selected variables. We have 11 features and our target varible in our  numeric-only dataset imp_var.
+```{r}
+corr_matrix <- cor(imp_var_num)
+
+corr_matrix
+```
+
+**G.Data Visualization**
+
+```{r, warning=F, message=F}
+n<-nrow(imp_var_num)
+idx <- sample.int(n, size = round(0.25*n))
+imp_var_num1 <- imp_var_num[idx, ]
+
+library(ggplot2)
+library(psych)
+
+
+pairs.panels(imp_var_num1[c("dti", "funded_amnt", "last_fico_range_low", "grade1")])
+pairs.panels(imp_var_num1[c("grade1", "home_ownership1", "tot_cur_bal", "revol_bal")])
+pairs.panels(imp_var_num1[c("loan_status","last_fico_range_low", "funded_amnt", "grade1")])
+
+```
+
+
+
+Our general dataset  includes our twelve final  variables: Eleven important non-colinear features and one target variable.
+A summary of the dataset we will be using is shown below.
+
+This data set will be transformed according to the needs of each type of model.
+
+
+
+```{r}
+imp_var_target <- clean_12_14%>%
+                        select(last_fico_range_low, last_pymnt_amnt, funded_amnt,
+                               revol_bal, grade, home_ownership, addr_state,
+                               mo_sin_old_rev_tl_op, annual_inc,
+                               tot_cur_bal, dti, loan_status)%>%
+                        mutate(loan_status = as.factor(loan_status))
+str(imp_var_target)
+
+```
+
+
+**H. Null Model as a baseline for our Prediction Models**
+
+
+**We establish a baseline by building our null model**
+
+```{r, tidy=F}
+
+#Subset our clean dataset  with the important variables in their original 
+#formats (numeric or factor).
+
+str(imp_var_target)
+```
+
+
+
+
+**Calculate the baseline accuracy**
+
+
+```{r, message=F, warning=F}
+
+library(mosaic)
+
+#Build the train data set with 75% of the data
+n<-nrow(imp_var_target)
+test_idx <- sample.int(n, size = round(0.25*n))
+train <- imp_var_target[-test_idx, ]
+
+
+#Build the test data set with the remaining 25%
+test <- imp_var_target[test_idx, ]
+```
+
+
+
+```{r}
+tally(~loan_status,  data=train, format="percent")
+tally(~loan_status, data=test, format="percent")
+
+null_train<-mean(train$loan_status==0)
+null_test<-mean(test$loan_status == 0)
+```
+**I. Classification Models**
+
+**I.1 k-NN Model**
+
+**kNN Step 1 - Collecting Data**
+
+We will use the all-numeric version of our dataset for the kNN model
+
+```{r}
+
+str(imp_var_num)
+
+```
+
+
+
+**kNN Step 2 - Exploring and preparing the data**
+
+**Data Preparation: Transformation**
+
+For this model, we use only numerical data. The three categorical variables in our dataset (home_ownership, grade and addr_state) were transformed into integer variables for this model).
+
+Our data is all numeric and we drop the target variable for now to use it for kNN.
+```{r}
+# Ready dataframes with for kNN training
+
+
+imp_var2 <-imp_var_num%>%
+              select(-loan_status)
+
+
+```
+
+**Data Preparation: Normalization**
+```{r}
+#Create function to normalize data for kNN
+normalize <- function(x) {
+                return (( x - min(x))/ (max(x) - min(x)))
+}
+
+#Normalize the data for kNN
+imp_vars_n <- as.data.frame(lapply(imp_var2, normalize))%>%
+                              mutate(loan_status = imp_var_target$loan_status)
+```
+
+
+
+**Data Preparation: Creating training and test datasets**
+
+```{r}
+#Build the train data set with 75% of the data for kNN
+n<-nrow(imp_vars_n)
+test_idx <- sample.int(n, size = round(0.25*n))
+train_knn <- imp_vars_n[-test_idx, ]
+
+
+#Build the test data set with the remaining 25% for kNN
+test_knn <- imp_vars_n[test_idx, ]
+
+
+train_q <- train_knn%>%
+                 select(-loan_status)
+
+test_q <- test_knn%>%
+                select(-loan_status)
+```
+
+
+**kNN Step 3 - Training a model on the data**
+
+```{r, message=F, warning=F, tidy=F}
+
+library(class)
+
+
+# Fit the model in the training dataset
+
+loan_status_knn <- knn(train=train_q, test=test_q, cl = train_knn$loan_status, k = 7)
+
+confusion<-tally(loan_status_knn ~ loan_status, data=test_knn, format = "count")
+
+confusion
+
+ev_knn<-sum(diag(confusion)) / nrow(test_knn)
+ev_knn
+
+
+
+```
+**kNN Step 4 -Evaluate Performance**
+
+
+```{r}
+library(gmodels)
+CrossTable(x=test_knn$loan_status, y=loan_status_knn, prop.chisq = FALSE)
+```
+
+
+
+**I.2 Logistic Regression Model**
+
+**Logistic Regression Step 1 - Collecting Data**
+
+We start with our numeric clean dataset called imp_var_num
+
+```{r}
+str(imp_var_num)
+```
+
+**Logistic Regression Step 2 - Exploring and preparing the data**
+
+**Data Preparation: Transformation**
+
+We will transform our categorical variables into numerical and will use an all numerical features data set as our first strategy to fit our logistic regression model.
+```{r}
+
+imp_var1 <- imp_var_num%>%
+                mutate(loan_status = as.factor(loan_status))
+    
+```
+
+
+**Data Preparation: Creating training and test datasets**
+
+
+```{r, warning=F, message=F}
+#Logistic Regression
+n<-nrow(imp_var1)
+test_idx <- sample.int(n, size = round(0.25*n))
+train_lr <- imp_var1[-test_idx, ]
+
+#Build the test data set with the remaining 25%
+test_lr <- imp_var1[test_idx, ]
+
+```
+
+
+**Logistic Regression Step 3 - Training a model on the data**
+
+```{r}
+formul <- as.formula ("loan_status ~ last_fico_range_low +
+                      last_pymnt_amnt + funded_amnt + revol_bal + 
+                      grade1 + home_ownership1 + addr_state1 + 
+                      mo_sin_old_rev_tl_op + annual_inc + 
+                      tot_cur_bal + dti")
+
+
+Logist_Reg <- glm(formul,family=binomial(link='logit'), data = train_lr)
+
+summary(Logist_Reg)
+
+fitted.results <- predict(Logist_Reg, newdata = train_lr, type = 'response')
+head(fitted.results)
+
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+
+
+misClasificError_train <- mean(fitted.results != train_lr$loan_status, na.rm=TRUE)
+print(paste('Accuracy',1-misClasificError_train))
+
+lr_acc_train <- 1-misClasificError_train
+```
+
+
+**Logistic Regression Step 4 - Evaluating Model Performance**
+
+```{r}
+# test
+
+fitted.results1 <- predict(Logist_Reg, newdata = test_lr, type = 'response')
+
+fitted.results1 <- ifelse(fitted.results1 > 0.5,1,0)
+
+misClasificError_test <- mean(fitted.results1 != test_lr$loan_status, na.rm=TRUE)
+print(paste('Accuracy',1-misClasificError_test))
+
+lr_acc_test <- 1-misClasificError_test
+
+```
+
+
+**Logistic Regression Step 5 - Improving Model Performance**
+
+```{r, message=F, warning=F}
+library(ROCR)
+p <- predict(Logist_Reg, newdata=test_lr, type="response")
+pr <- prediction(p, test_lr$loan_status)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
+
+
+***We have an excellent AUC of 0.96***
+
+
+
+
+
+**I.3 Decision Tree rPart Model**
+
+**rPart Step 1 - Collecting Data**
+
+We start with our base clean dataset called imp_var_target
+
+```{r}
+str(imp_var_target)
+```
+
+
+**rPart Step 2 - Exploring and preparing the data**
+
+**Data Preparation: Creating training and test datasets**
+
+```{r}
+
+#Decision Tree
+n<-nrow(imp_var_target)
+
+test_idx <- sample.int(n, size = round(0.25*n))
+train_dt <- imp_var_target[-test_idx, ]
+nrow(train_dt)
+ncol(train_dt)
+#Build the test data set with the remaining 25%
+test_dt <- imp_var_target[test_idx, ]
+nrow(test_dt)
+```
+
+**rPart Step 3 - Training a model on the data**
+
+
+
+```{r, warning=F, message=F}
+
+formul3 <- as.formula ("loan_status ~ last_fico_range_low + 
+                       last_pymnt_amnt + funded_amnt + revol_bal + grade + 
+                       home_ownership + addr_state + mo_sin_old_rev_tl_op + 
+                       annual_inc + tot_cur_bal + dti")
+
+
+library(rpart) 
+dec_tree <- rpart(formula= formul3, data = train_dt)
+
+
+#summary(dec_tree)
+```
+
+**rPart Step 4 - Evaluating Model Performance**
+
+
+```{r}
+
+#train dataset
+fitted.values.train <- predict(dec_tree, newdata = train_dt)
+summary(fitted.values.train)
+
+fitted.values.train <- ifelse(fitted.values.train > 0.5,1,0)
+
+#test dataset
+fitted.values.test <- predict(dec_tree, newdata = test_dt)
+summary(fitted.values.test)
+
+fitted.values.test <- ifelse(fitted.values.test > 0.5,1,0)
+
+#accuracy train
+
+misClasificError_train <- mean(fitted.values.train != train_dt$loan_status, na.rm=TRUE)
+print(paste('Accuracy training data',1-misClasificError_train))
+
+rpart_acc_train <-1-misClasificError_train
+
+#accuracy test
+
+misClasificError_test <- mean(fitted.values.test != test_dt$loan_status, na.rm=TRUE)
+print(paste('Accuracy test data',1-misClasificError_test))
+
+rpart_acc_test <-1-misClasificError_test
+```
+
+**rPart Step 5 - Improving Model Performance**
+
+```{r}
+
+```
+
+
+**I.4 C50 Model**
+
+**C50 Step 1 - Collecting Data**
+
+For this algorithm we will use our dataset with all numerical features called imp_vars_num
+
+
+
+```{r}
+str(imp_vars_n)
+```
+
+**C50 Step 2 - Exploring and preparing the data**
+
+**Data Preparation: Creating training and test datasets**
+
+
+```{r}
+
+n<-nrow(imp_vars_n)
+test_idx <- sample.int(n, size = round(0.25*n))
+train_c50 <- imp_vars_n[-test_idx, ]
+
+
+#Build the test data set with the remaining 25%
+test_c50 <- imp_vars_n[test_idx, ]
+
+```
+
+**C50 Step 3 - Training a model on the data**
+
+```{r, message=F, warning=F}
+library(C50) 
+
+tree2 <- C5.0(formula = formul, data = train_c50)
+tree2
+```
+
+**C50 Step 4 - Evaluating Model Performance**
+
+```{r}
+
+# train ds
+fitted.values.train2 <- predict(tree2, newdata = train_c50)
+summary(fitted.values.train2)
+
+#test ds
+fitted.values.test2 <- predict(tree2, newdata = test_c50)
+summary(fitted.values.test2)
+
+# prediction accuracies
+misClasificError_train <- mean(fitted.values.train2 != train_c50$loan_status, na.rm=TRUE)
+print(paste('Accuracy training data',1-misClasificError_train))
+
+c50_acc_train <- 1-misClasificError_train
+
+misClasificError_test <- mean(fitted.values.test2 != test_c50$loan_status, na.rm=TRUE)
+print(paste('Accuracy test data',1-misClasificError_test))
+
+c50_acc_test <- 1-misClasificError_test
+
+```
+
+
+
+
+**I.5 Random Forest Model**
+
+**Random Forest Step 1 - Collecting Data**
+
+We start with our base clean dataset with numerical and categorical features called imp_var_target
+
+
+```{r}
+str(imp_var_target)
+```
+
+**Random Forest Step 2 - Exploring and preparing the data**
+
+**Data Preparation: Creating training and test datasets**
+
+
+```{r}
+
+
+n<-nrow(imp_var_target)
+test_idx <- sample.int(n, size = round(0.25*n))
+train_rf <- imp_var_target[-test_idx, ]
+
+
+#Build the test data set with the remaining 25%
+test_rf <- imp_var_target[test_idx, ]
+
+
+```
+
+**Random Forest Step 3 - Training a model on the data**
+
+```{r, message=F, warning=F}
+
+formul2 <- as.formula ("loan_status ~ last_fico_range_low + 
+                       last_pymnt_amnt + funded_amnt + revol_bal + grade + 
+                       home_ownership + addr_state + mo_sin_old_rev_tl_op + 
+                       annual_inc + tot_cur_bal + dti")
+
+library(randomForest)
+
+mod_forest <- randomForest(formul2, data=train_rf, ntree=201, mtry = 3)
+mod_forest
+
+
+mod_forest1 <- randomForest(formul2, data=test_rf, ntree=201, mtry = 3)
+mod_forest1
+```
+
+
+**Random Forest Step 4 - Evaluating Model Performance**
+```{r}
+rf_acc_train <- sum(diag(mod_forest$confusion)) / nrow(train_rf)
+rf_acc_train
+
+rf_acc_test <- sum(diag(mod_forest1$confusion)) / nrow(test_rf)
+rf_acc_test
+```
+
+**Models Performances Summary.**
+
+Summary of Prediction Accuracies by model and comparison with kaggle competition
+
+Model             |    Train               |    Test               |  Kaggle Competition
+------------------|------------------------|-----------------------|---------------------
+Null              | `r null_train`         | `r null_test`         |   N/A 
+kNN               |         N/A            | `r ev_knn`            |  0.7760
+Log Regression    | `r lr_acc_train`       | `r lr_acc_test`       |  0.8500 
+rPart             | `r rpart_acc_train`    | `r rpart_acc_test`    |   N/A
+C50               | `r c50_acc_train`      | `r c50_acc_test`      |   N/A
+Random Forest     | `r rf_acc_train`       | `r rf_acc_test`       |  0.8900
+
+
+
+**Conclusion**
+
+Most of the models have good accuracy rates. The models in this work have a better performance that the results of the ones in the github competition.  The model with the best performance is the Random Forest. We will fit this model to the entire 2012-2014 dataset and assess its performance in 10% of the 2015 dataset.
+
+The results are presented at the end of the algorithm run.
+
+**Using the Best Model for Clasification of 2015 data (Extra Bonus)**
+
+```{r, tidy=F}
+
+#1.Data collection
+
+#2.Data Preparation
+clean_2015<- clean_15%>%
+        mutate(loan_status = as.factor(loan_status))
+
+n<-nrow(clean_2015)
+idx <- sample.int(n, size = round(0.10*n))
+year_2015 <- clean_2015[idx, ]
+
+#3. Train the model in the 2012_2014 dataset
+mod_forest <- randomForest(formul2, data=imp_var_target, ntree=201, mtry = 3)
+mod_forest
+
+sum(diag(mod_forest$confusion)) / nrow(imp_var_target)
+
+
+#4. Evaluate Model performance in 10% of the 2015 dataset.
+
+mod_forest1 <- randomForest(formul2, data=year_2015, ntree=201, mtry = 3)
+mod_forest1
+
+bm_acc <- sum(diag(mod_forest1$confusion)) / nrow(year_2015)
+bm_acc
+```
+
+```{r}
+toc()
+```
+
+
+
+**Best Model Performance Results**
+
+Model             | Train df   | Test df       |  Accuracy
+------------------|------------|---------------|---------------
+Random Forest     | 2012-2014  |  10% of 2015  | `r bm_acc`
+
+
+We were able to have a high level of accuracy in our predictions for 2015 using Random Forest. 
+
+
+
+
+
