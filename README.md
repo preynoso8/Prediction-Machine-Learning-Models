@@ -1,5 +1,6 @@
 # Prediction-Machine-Learning-Models
 Training and testing five different Statistical Learning Models to predict if loans will be paid (LendingClub data)
+
 In this project, three years worth of data (2012, 2013, 2014) from Lending Club- the online platform for personal lending- are used to train and test five statistical learning algorithms: kNN, Logistic Regression, Rpart, decision tree, C5.0, and Random Forest. 
 The goal is to predict if the loans will be paid or not. Every model is evaluated for accuracy, and the best model is selected to classify 10% of the loans made during 2015.
 
